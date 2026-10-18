@@ -1,53 +1,57 @@
-# `als` — Gerenciador de Comandos & Aliases Parametrizados no Terminal
+# `als` — Parameterized Terminal Command & Alias Manager
 
-[![Licença: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev/)
 
-> Transforme comandos longos e repetitivos em executáveis diretos no seu terminal (`$PATH`) com parâmetros dinâmicos (`{{var}}`), isolamento estrito de segredos e sincronização via Git.
+[**English**](README.md) · [Português (BR)](README.pt-BR.md) · [Why `als`?](#why-als) · [Quick Start](#quick-start) · [Security & Git Sync](#security) · [Team Sharing](#team-sharing) · [License](#license)
+
+> Turn long, repetitive commands into direct executables in your terminal (`$PATH`) with dynamic parameters (`{{var}}`), strict secret isolation, and Git synchronization.
 
 ---
 
-## 💡 Por que o `als` existe?
+<a id="why-als"></a>
+## 💡 Why `als` Exists
 
-O comando `alias` nativo do shell possui limitações graves no dia a dia:
-1. **Exige edição manual:** É preciso alterar arquivos `.zshrc`/`.bashrc` e recarregar cada aba aberta do terminal (`source`).
-2. **Não aceita parâmetros dinâmicos:** Um alias comum não permite passar variáveis no meio do comando (ex.: um IP que varia ou uma chave específica).
-3. **Quebra com caminhos relativos:** Comandos que referenciam arquivos locais (ex.: `ssh -i "chave.key"`) falham ao serem chamados de qualquer outro diretório.
-4. **Risco de vazamento de credenciais:** Salvar IPs de servidores, chaves privadas ou tokens no `.zshrc` vaza dados sensíveis ao versionar dotfiles no GitHub.
+The native shell `alias` command has severe day-to-day limitations:
+1. **Requires manual editing:** You must edit `.zshrc`/`.bashrc` files and reload every open terminal tab (`source`).
+2. **No dynamic parameters:** A standard alias cannot accept variables in the middle of a command (e.g., a changing IP address or a specific SSH key).
+3. **Breaks with relative paths:** Commands referencing local files (e.g., `ssh -i "key.pem"`) fail when called from any other directory.
+4. **Credential leakage risk:** Saving server IPs, private keys, or tokens inside `.zshrc` leaks sensitive data when versioning dotfiles on GitHub.
 
-O **`als`** resolve isso criando **shims executáveis nativos no seu `$PATH`**: qualquer comando cadastrado fica imediatamente disponível em todas as abas do terminal, com tempo de inicialização `< 5ms`, repasse transparente de TTY (SSH, Docker, Vim) e separação física entre o modelo do comando (público) e os dados sensíveis (locais).
+**`als`** solves this by creating **native executable shims in your `$PATH`**: any registered command becomes immediately available across all terminal tabs, with `< 5ms` startup overhead, transparent TTY passthrough (SSH, Docker, Vim), and physical separation between the command template (public) and sensitive values (local).
 
 ---
 
-## 🛠️ Passo a Passo Completo
+<a id="quick-start"></a>
+## 🛠️ Complete Step-by-Step Guide
 
-### 1. Instalação
+### 1. Installation
 
-Dentro do diretório clonado do projeto, compile e copie o executável para o seu sistema:
+From the cloned project directory, build and copy the executable to your system:
 
 ```bash
-# 1. Compilar o binário
+# 1. Build the binary
 go build -o als ./cmd/als
 
-# 2. Mover para o diretório de executáveis do sistema
+# 2. Move to the system executables directory
 sudo cp ./als /usr/local/bin/
 
-# 3. Confirmar a instalação
+# 3. Verify installation
 als --help
 ```
 
 ---
 
-### 2. Configuração Inicial do Ambiente
+### 2. Initial Environment Setup
 
-Execute o comando de inicialização uma única vez:
+Run the initialization command once:
 
 ```bash
 als init
 ```
 
-Esse comando cria os diretórios seguros e o shim mestre do `als`. 
-* Caso o diretório de shims (`~/.local/share/als/bin`) ainda não esteja no seu `$PATH`, o `als init` instruirá a linha exata a ser adicionada ao seu `~/.zshrc` ou `~/.bashrc`:
+This command creates the secure directories and the master `als` shim.
+* If the shims directory (`~/.local/share/als/bin`) is not yet in your `$PATH`, `als init` will print the exact line to add to your `~/.zshrc` or `~/.bashrc`:
   ```bash
   echo 'export PATH="$HOME/.local/share/als/bin:$PATH"' >> ~/.zshrc
   source ~/.zshrc
@@ -55,163 +59,166 @@ Esse comando cria os diretórios seguros e o shim mestre do `als`.
 
 ---
 
-### 3. Cadastrar um Comando Parametrizado
+### 3. Register a Parameterized Command
 
-Para registrar um comando contendo variáveis dinâmicas ou dados sensíveis, utilize a sintaxe `{{nome_da_variavel}}`.
+To register a command containing dynamic variables or sensitive data, use the `{{variable_name}}` syntax.
 
-Por exemplo, para criar o comando **`conectarServidor`**:
+For example, to create the **`connectServer`** command:
 
 ```bash
-als add conectarServidor 'ssh -i "{{key}}" ubuntu@{{server_ip}}' --desc "Acesso SSH ao servidor principal"
+als add connectServer 'ssh -i "{{key}}" ubuntu@{{server_ip}}' --desc "SSH access to main server"
 ```
 
-> **Dica:** O `als` possui um analisador estático integrado (Linter). Ele detecta automaticamente que `key` e `server_ip` são credenciais sensíveis e as isola fora do arquivo sincronizado com o Git.
+> **Tip:** `als` includes a built-in static analyzer (Linter). It automatically detects that `key` and `server_ip` are sensitive credentials and isolates them outside the Git-synced file.
 
-Você também pode utilizar o modo interativo simplesmente digitando:
+You can also use interactive mode simply by running:
 ```bash
 als add
 ```
 
 ---
 
-### 4. Configurar os Segredos (`key` e `server_ip`)
+### 4. Configure Secrets (`key` and `server_ip`)
 
-O `als` nunca salva dados sensíveis (como IPs de servidores e caminhos de chaves) no arquivo de comandos público (`commands.toml`). Ele armazena esses valores em `~/.config/als/secrets.toml` com permissão estrita `0600` (leitura e escrita apenas pelo seu usuário).
+`als` never saves sensitive data (such as server IPs and private key paths) in the public commands file (`commands.toml`). It stores those values in `~/.config/als/secrets.toml` with strict `0600` permissions (read and write only by your user).
 
-Você pode definir os valores de **duas formas**:
+You can define values in **two ways**:
 
-#### Opção A: Interativa (No primeiro uso)
-Na primeira vez que você executar o comando, o terminal detectará que as variáveis estão vazias e abrirá um prompt seguro:
-1. Digite o caminho da chave (ex.: `~/.ssh/minha-chave-producao.key`).
-2. Digite o IP do servidor (ex.: `203.0.113.10`).
-3. O terminal perguntará se deseja salvar esses valores localmente no `secrets.toml` para não precisar digitá-los novamente.
+#### Option A: Interactive (On first run)
+The first time you execute the command, the terminal detects missing variables and opens a secure prompt:
+1. Enter the key path (e.g., `~/.ssh/prod-key.pem`).
+2. Enter the server IP (e.g., `203.0.113.10`).
+3. The terminal will ask whether you want to save these values locally in `secrets.toml` so you don't have to type them again.
 
-#### Opção B: Direta (Editando o arquivo local `secrets.toml`)
-Abra o arquivo `~/.config/als/secrets.toml` (ele é criado automaticamente pelo `als`):
+#### Option B: Direct (Editing local `secrets.toml`)
+Open `~/.config/als/secrets.toml` (created automatically by `als`):
 
 ```toml
 # ~/.config/als/secrets.toml
-# Arquivo local da máquina — NUNCA comitado no Git (permissão 0600)
+# Local machine file — NEVER committed to Git (permission 0600)
 
-[commands.conectarServidor]
-key = "/Users/seu-usuario/.ssh/minha-chave-producao.key"
+[commands.connectServer]
+key = "/Users/your-username/.ssh/prod-key.pem"
 server_ip = "203.0.113.10"
 ```
 
-*Se você utiliza a mesma chave SSH para múltiplos comandos, pode configurá-la no escopo global:*
+*If you use the same SSH key across multiple commands, you can configure it in the global scope:*
 ```toml
 [global]
-key = "/Users/seu-usuario/.ssh/chave-geral.key"
+key = "/Users/your-username/.ssh/default-key.pem"
 ```
 
 ---
 
-### 5. Chamar o Comando no Terminal
+### 5. Run the Command in Your Terminal
 
-Depois de cadastrado, **você não precisa digitar `als run`**. Digite apenas o nome do comando criado em qualquer terminal ou aba:
+Once registered, **you do not need to type `als run`**. Just type the command name directly in any terminal or tab:
 
 ```bash
-conectarServidor
+connectServer
 ```
 
-O `als` resolverá as variáveis `$key` e `$server_ip` no ambiente em milissegundos e iniciará a sessão SSH diretamente.
+`als` resolves `$key` and `$server_ip` in the environment within milliseconds and starts the SSH session directly.
 
-#### Repasse de Flags e Argumentos Extras
-Qualquer argumento adicional passado para o alias é repassado intacto ao comando real via `"$@"`:
+#### Passing Extra Flags and Arguments
+Any additional arguments passed to the alias are forwarded intact to the underlying command via `"$@"`:
 
 ```bash
-# Adiciona modo verboso (-v) e porta customizada (-p 2222) ao SSH
-conectarServidor -v -p 2222
+# Adds verbose mode (-v) and custom port (-p 2222) to SSH
+connectServer -v -p 2222
 ```
 
-#### Sobrescrita Rápida de Parâmetros
-Se precisar conectar pontualmente em outro IP sem alterar o arquivo salvo:
+#### Quick Parameter Override
+If you need a one-off connection to another IP without modifying your saved file:
 
 ```bash
-conectarServidor @server_ip=203.0.113.25
-```
-
----
-
-### 6. Inspeção e Teste Seguro (Dry-Run & Info)
-
-Para inspecionar o que um comando faz antes de executá-lo:
-
-```bash
-# Exibe template, variáveis cadastradas e descrição
-conectarServidor --als-info
-
-# Simula a execução completa sem disparar o processo real
-conectarServidor --als-dry-run
+connectServer @server_ip=203.0.113.25
 ```
 
 ---
 
-## 🔒 Arquitetura de Segurança e Git Sync
+### 6. Safe Inspection & Testing (Dry-Run & Info)
 
-O `als` implementa uma barreira estrita entre modelos de comando e credenciais:
+To inspect what a command does before executing it:
+
+```bash
+# Displays template, registered variables, and description
+connectServer --als-info
+
+# Simulates full execution without spawning the real process
+connectServer --als-dry-run
+```
+
+---
+
+<a id="security"></a>
+## 🔒 Security Architecture & Git Sync
+
+`als` enforces a strict boundary between command templates and credentials:
 
 ```text
 ~/.config/als/                  (drwx------ 0700)
-├── .git/                       (Repositório Git de dotfiles)
-├── .gitignore                  (Bloqueia secrets.toml, .lock, *.tmp)
-├── .lock                       (Bloqueio POSIX flock para concorrência)
-├── commands.toml               (Templates públicos — SEGURO para o Git)
-└── secrets.toml                (Valores locais — NUNCA enviado ao Git)
+├── .git/                       (Dotfiles Git repository)
+├── .gitignore                  (Blocks secrets.toml, .lock, *.tmp)
+├── .lock                       (POSIX flock for concurrency safety)
+├── commands.toml               (Public templates — SAFE for Git)
+└── secrets.toml                (Local values — NEVER sent to Git)
 
-~/.local/share/als/bin/         (No seu $PATH)
-├── .als-bin                    (Symlink mestre -> /usr/local/bin/als)
-└── conectarServidor            (Symlink relativo -> .als-bin)
+~/.local/share/als/bin/         (In your $PATH)
+├── .als-bin                    (Master symlink -> /usr/local/bin/als)
+└── connectServer               (Relative symlink -> .als-bin)
 ```
 
-### Por que é seguro enviar para o Git?
-1. **Proteção contra `ps aux`:** Ao executar o comando, os segredos são passados como variáveis de ambiente (`$ALS_VAR_<NOME>`), impedindo que senhas ou IPs fiquem expostos como texto puro na lista de processos do sistema operacional.
-2. **Trava de Segurança no Git Sync:** O comando `als sync` contém uma validação automática que bloqueia a sincronização caso detecte que o arquivo `secrets.toml` foi acidentalmente rastreado pelo Git.
-3. **Escrita Atômica:** Alterações concorrentes em abas simultâneas utilizam `flock` consultivo para evitar arquivos corrompidos.
+### Why is it safe to push to Git?
+1. **Protection against `ps aux`:** When executing a command, secrets are injected as environment variables (`$ALS_VAR_<NAME>`), preventing passwords or IPs from being exposed as plain text in the OS process list.
+2. **Git Sync Safety Lock:** `als sync` includes an automatic check that aborts synchronization if it detects that `secrets.toml` was accidentally tracked by Git.
+3. **Atomic Writes:** Concurrent modifications across multiple terminal tabs use advisory `flock` locking to prevent file corruption.
 
 ---
 
-### 👥 Compartilhamento em Equipes: Comandos vs. Credenciais
+<a id="team-sharing"></a>
+### 👥 Team Sharing: Commands vs. Credentials
 
-Um dos casos de uso mais poderosos do `als` é a padronização de rotinas e fluxos operacionais em equipes de TI e engenharia. Entenda a separação prática entre os 3 níveis:
+One of the strongest use cases for `als` is standardizing operational workflows across IT and engineering teams. Understand the practical separation across 3 layers:
 
-#### 1. O Software Open-Source (Este Repositório Público)
-* Contém apenas o motor e binário do `als`.
-* **Nenhum comando ou configuração sua é enviada para cá.** Seus comandos salvos ficam guardados exclusivamente dentro da pasta `~/.config/als/` da sua máquina pessoal.
+#### 1. The Open-Source Software (This Public Repository)
+* Contains only the `als` engine and binary.
+* **None of your commands or configurations are ever sent here.** Your saved commands live exclusively inside `~/.config/als/` on your own machine.
 
-#### 2. O Repositório Próprio da sua Equipe (`als sync`)
-* Um líder de TI ou equipe pode criar um repositório Git próprio (geralmente privado, ex.: `git@github.com:sua-empresa/comandos-ti.git`).
-* Ao configurar `als sync --remote <url>`, apenas os **modelos de comandos** (`commands.toml`) são sincronizados.
-* Todos os membros da equipe que rodarem `als sync` passam a ter exatamente os mesmos comandos disponíveis no terminal (ex.: `conectarProducao`, `backupBanco`, `tunnelsCluster`), garantindo padronização imediata.
+#### 2. Your Team's Own Repository (`als sync`)
+* An IT lead or engineering team can create their own Git repository (usually private, e.g., `git@github.com:your-company/it-commands.git`).
+* When configuring `als sync --remote <url>`, only the **command templates** (`commands.toml`) are synchronized.
+* Every team member who runs `als sync` immediately gets the exact same commands in their terminal (e.g., `connectProd`, `backupDb`, `clusterTunnels`), ensuring instant standardization.
 
-#### 3. Fronteira de Segurança: Por que chaves NUNCA vão para o Git
-* O `als` **bloqueia deliberadamente** o envio do arquivo `secrets.toml` para o Git, mesmo que o repositório seja privado da empresa.
-* **Motivo:** Versionar chaves privadas SSH (`.key`, `.pem`) ou tokens em repositórios Git é uma grave falha de conformidade (qualquer clone ou histórico vazado expõe a infraestrutura). Além disso, caminhos de arquivos diferem entre máquinas (ex.: `/Users/chefe/.ssh/id_rsa` no macOS vs `/home/dev/.ssh/id_rsa` no Linux).
-* **Como funciona na prática:** O time compartilha a **estrutura do comando** via Git (`ssh -i "{{key}}" ubuntu@{{server_ip}}`). Cada desenvolvedor mantém sua respectiva chave e permissões configuradas no seu `secrets.toml` local (ou responde ao prompt interativo na primeira execução).
+#### 3. Security Boundary: Why Keys NEVER Go to Git
+* `als` **deliberately blocks** `secrets.toml` from being pushed to Git, even in a private company repository.
+* **Reason:** Versioning private SSH keys (`.key`, `.pem`) or tokens in Git repositories is a severe compliance failure (any leaked clone or commit history exposes your infrastructure). Additionally, file paths differ across machines (e.g., `/Users/lead/.ssh/id_rsa` on macOS vs `/home/dev/.ssh/id_rsa` on Linux).
+* **How it works in practice:** The team shares the **command structure** via Git (`ssh -i "{{key}}" ubuntu@{{server_ip}}`). Each developer keeps their own key path and permissions configured in their local `secrets.toml` (or answers the interactive prompt on first run).
 
 ---
 
-## 📋 Comandos Utilitários
+## 📋 Utility Commands
 
 ```bash
-# Listar todos os aliases cadastrados
+# List all registered aliases
 als list
 
-# Ver detalhes e localização do shim de um alias
-als info conectarServidor
+# View details and shim location of an alias
+als info connectServer
 
-# Remover um alias e limpar seu symlink no sistema
-als rm conectarServidor
+# Remove an alias and clean up its system symlink
+als rm connectServer
 
-# Executar diagnóstico de saúde do sistema e reconstruir shims
+# Run system health diagnostics and rebuild shims
 als doctor
 
-# Sincronizar comandos públicos com seu repositório de dotfiles
+# Synchronize public commands with your dotfiles repository
 als sync
 ```
 
 ---
 
-## 📄 Licença
+<a id="license"></a>
+## 📄 License
 
-Distribuído sob a licença MIT. Consulte [LICENSE](LICENSE) para mais informações.
+Distributed under the **Apache License 2.0**. See [LICENSE](LICENSE) for more information.
