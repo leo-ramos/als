@@ -17,11 +17,13 @@ type Command struct {
 
 // VarDef defines a parameter template inside a command.
 type VarDef struct {
-	Secret  bool     `toml:"secret,omitempty"`
-	Prompt  string   `toml:"prompt,omitempty"`
-	Scope   string   `toml:"scope,omitempty"` // "command" (default) or "global"
-	Choices []string `toml:"choices,omitempty"`
-	Default string   `toml:"default,omitempty"`
+	Secret       bool     `toml:"secret,omitempty"`
+	Prompt       string   `toml:"prompt,omitempty"`
+	Scope        string   `toml:"scope,omitempty"` // "command" (default) or "global"
+	Choices      []string `toml:"choices,omitempty"`
+	Default      string   `toml:"default,omitempty"`
+	Positional   bool     `toml:"positional,omitempty"`    // Accepts direct CLI positional argument
+	PromptAlways bool     `toml:"prompt_always,omitempty"` // Always opens interactive prompt if not provided via CLI
 }
 
 // SecretsDoc represents the schema of secrets.toml (Strictly local, 0600 perm, never committed).

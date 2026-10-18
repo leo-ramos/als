@@ -143,6 +143,7 @@ Use {{var}} in the command to define dynamic parameters.`,
 						}),
 					huh.NewInput().
 						Title("Command to execute").
+						Description("Tip: Use {{var}} for dynamic parameters (e.g. URL={{url}})").
 						Placeholder(`e.g. ssh -i "key.pem" ubuntu@1.2.3.4`).
 						Value(&rawCmd).
 						Validate(func(s string) error {
@@ -170,6 +171,8 @@ Use {{var}} in the command to define dynamic parameters.`,
 			return err
 		}
 
+		extractedValues := make(map[string]string)
+
 		// Run Linter
 		warnings := linter.Analyze(rawCmd)
 		if len(warnings) > 0 {
@@ -181,7 +184,7 @@ Use {{var}} in the command to define dynamic parameters.`,
 			if isInteractive {
 				for _, w := range warnings {
 					var fixIt bool
-					promptTitle := fmt.Sprintf("Auto-fix '%s' by parameterizing with {{%s}}?", w.RawMatch, w.VariableKey)
+					promptTitle := fmt.Sprintf("Auto-fix '%s' by parameterizing with {{%s}}?", w.TargetSpan, w.VariableKey)
 					confirmForm := huh.NewForm(
 						huh.NewGroup(
 							huh.NewConfirm().
@@ -197,31 +200,52 @@ Use {{var}} in the command to define dynamic parameters.`,
 						return err
 					}
 					if fixIt {
-						placeholder := fmt.Sprintf("{{%s}}", w.VariableKey)
-						// Replace in command
-						rawCmd = strings.ReplaceAll(rawCmd, w.RawMatch, placeholder)
-						// Save secret locally
-						_ = st.SetSecret(aliasName, w.VariableKey, w.RawMatch, false)
-						fmt.Printf("    Replaced with %s and saved secret locally in secrets.toml.\n", infoStyle.Render(placeholder))
+						rawCmd = strings.Replace(rawCmd, w.TargetSpan, w.ReplacementSpan, 1)
+						extractedValues[w.VariableKey] = w.RawMatch
+						fmt.Printf("    Replaced with %s\n", infoStyle.Render(w.ReplacementSpan))
 					}
 				}
 			}
 		}
 
-		// Extract variables
-		varDefs := make(map[string]store.VarDef)
-		for _, match := range varRegex.FindAllStringSubmatch(rawCmd, -1) {
-			if len(match) > 1 {
-				vName := match[1]
-				isSecret := strings.Contains(strings.ToLower(vName), "key") ||
-					strings.Contains(strings.ToLower(vName), "ip") ||
-					strings.Contains(strings.ToLower(vName), "secret") ||
-					strings.Contains(strings.ToLower(vName), "token") ||
-					strings.Contains(strings.ToLower(vName), "pass")
+		// Configure variables
+		var varDefs map[string]store.VarDef
+		if isInteractive {
+			configured, err := configureVariablesWizard(rawCmd, aliasName, nil, extractedValues)
+			if err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					fmt.Println(warnStyle.Render("✗ Operation cancelled."))
+					return nil
+				}
+				return err
+			}
+			varDefs = configured
+		} else {
+			varDefs = make(map[string]store.VarDef)
+			for _, match := range varRegex.FindAllStringSubmatch(rawCmd, -1) {
+				if len(match) > 1 {
+					vName := match[1]
+					isSecret := strings.Contains(strings.ToLower(vName), "key") ||
+						strings.Contains(strings.ToLower(vName), "ip") ||
+						strings.Contains(strings.ToLower(vName), "secret") ||
+						strings.Contains(strings.ToLower(vName), "token") ||
+						strings.Contains(strings.ToLower(vName), "pass")
 
-				varDefs[vName] = store.VarDef{
-					Secret: isSecret,
-					Prompt: fmt.Sprintf("Enter %s", vName),
+					defVal := ""
+					if val, ok := extractedValues[vName]; ok {
+						if isSecret {
+							_ = st.SetSecret(aliasName, vName, val, false)
+						} else {
+							defVal = val
+						}
+					}
+
+					varDefs[vName] = store.VarDef{
+						Secret:     isSecret,
+						Default:    defVal,
+						Positional: true,
+						Prompt:     fmt.Sprintf("Enter %s", vName),
+					}
 				}
 			}
 		}

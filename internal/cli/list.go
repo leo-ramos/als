@@ -39,6 +39,9 @@ var listCmd = &cobra.Command{
 		}
 		sort.Strings(keys)
 
+		paramStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("51"))
+		hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+
 		for _, name := range keys {
 			cmdDef := doc.Commands[name]
 			tagStr := ""
@@ -49,7 +52,31 @@ var listCmd = &cobra.Command{
 			if cmdDef.Desc != "" {
 				fmt.Printf("  %s\n", cmdDef.Desc)
 			}
-			fmt.Printf("  %s\n\n", cmdStyle.Render(cmdDef.Cmd))
+
+			// Highlight {{var}} in command template
+			renderedCmd := varRegex.ReplaceAllStringFunc(cmdDef.Cmd, func(m string) string {
+				return paramStyle.Render(m)
+			})
+			fmt.Printf("  %s\n", cmdStyle.Render(renderedCmd))
+
+			// Show parameter usage hint if command has variables
+			if len(cmdDef.Vars) > 0 {
+				var varSummaries []string
+				for vName, vDef := range cmdDef.Vars {
+					state := "positional"
+					if vDef.Secret {
+						state = "secret"
+					} else if vDef.Default != "" {
+						state = fmt.Sprintf("default: %s", vDef.Default)
+					} else if len(vDef.Choices) > 0 {
+						state = fmt.Sprintf("choices: %s", strings.Join(vDef.Choices, "|"))
+					}
+					varSummaries = append(varSummaries, fmt.Sprintf("{{%s}} (%s)", vName, state))
+				}
+				sort.Strings(varSummaries)
+				fmt.Printf("  %s %s\n", hintStyle.Render("↳ params:"), hintStyle.Render(strings.Join(varSummaries, ", ")))
+			}
+			fmt.Println()
 		}
 
 		return nil

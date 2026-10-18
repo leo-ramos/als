@@ -278,3 +278,172 @@ ecommerce-prod = "45.55.120.10"
 
 1. **Nome definitivo da ferramenta/binário:** Vamos manter **`als`** ou você prefere outro nome para o comando principal e repositório no GitHub?
 2. **Início da implementação:** Deseja que eu inicie agora a **Fase 1 e Fase 2 da implementação** neste repositório?
+
+
+---
+
+# Deep Planning v1.1: Descoberta de Parâmetros (`KEY=VAL` / URLs), Resolução Posicional e Comando `als edit`
+
+> [!IMPORTANT]
+> **Status do Planejamento v1.1:** `APPROVED` (Concluídas as Fases 1 a 6 do fluxo `deep-planning`, incluindo `brainstorming` e revisão adversarial `multi-agent-brainstorming`).
+
+---
+
+## 1. Exploração de Abordagens e Consolidação do DESIGN V0 (Fase 1 & Fase 2)
+
+### 1.1 Alternativas Arquiteturais Avaliadas (Brainstorming Step 5)
+
+| Abordagem | Descrição | Complexidade | Risco | Manutenção | Veredito |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **Opção A (Recomendada): Placeholders `{{var}}` com Resolução Posicional Inteligente + Linter de `KEY=VAL`/URLs + Wizard `als edit`** | Expande o linter para detectar `CHAVE=VALOR` e URLs, adiciona etapa guiada no `als add`/`als edit` para definir o modo da variável (valor padrão salvo, perguntar sempre ou `choices`), e permite passar argumentos posicionais diretos na execução (`buildCdaForcaAdr https://...`) sem exigir `@var=`. | Média | Baixo | Alta coesão (reutiliza `store`, `compiler` e `huh`) | **Selecionada** |
+| **Opção B: Flag dedicada do Shim (`-p` / `--param`) + Truncamento de String (`URL=`)** | O comando salvo termina em `URL=` e o shim intercepta `-p <valor>` para concatenar ao final da string antes de chamar `/bin/sh`. | Baixa | **Crítico** | Frágil | **Rejeitada** (colide com `-p` do `ssh`/`docker`/`mkdir` e só suporta 1 parâmetro no fim do comando) |
+| **Opção C: Parser de Flags Dinâmicas por Variável (`--url=...`)** | Transforma cada `{{var}}` em uma flag POSIX `--<var>` interceptada pelo shim. | Média | Alto | Média | **Rejeitada** (colide com flags nativas do comando alvo como `--url`, `--env`, `--flavor` e exige digitar o nome da flag sempre) |
+
+### 1.2 Consolidação do DESIGN V0 (Hipótese Inicial)
+1. **Linter (`internal/linter/linter.go`):** Adicionar regex para capturar `([A-Za-z0-9_]+)=(https?://[^\s"']+)` e URLs soltas `https?://[^\s"']+`, sugerindo `{{<chave_lower>}}` (ex.: `URL=https://...` $\rightarrow$ `URL={{url}}`).
+2. **Fluxo `als add` e Novo `als edit` (`internal/cli/add.go`, `internal/cli/edit.go`):**
+   * `als edit [alias]`: Se `[alias]` for omitido, abre um seletor `huh.Select` com os aliases existentes. Em seguida, abre o formulário `huh.Form` pré-preenchido com `Alias Name`, `Command`, `Description`, `Tags` e `Confirm`.
+   * Ao detectar variáveis `{{var}}` (seja digitadas manualmente ou geradas pelo Linter), apresenta um passo de configuração para cada variável:
+     * Modo 1: **Valor padrão salvo** (usa o valor salvo quando chamado sem argumentos; permite sobrescrever na chamada).
+     * Modo 2: **Perguntar sempre (Prompt)** (sempre abre o input interativo se não for passado na linha de comando).
+     * Modo 3: **Lista de opções (`choices`)** (cadastra apelidos/opções como `prod`, `homol`).
+3. **Resolução Posicional (`internal/exec/resolver.go`):**
+   * Argumentos de linha de comando que não começam com `-` nem `@` preenchem na ordem as variáveis `{{var}}` declaradas em `compiled.Variables`.
+4. **Compilador (`internal/exec/compiler.go`):**
+   * Substituir `{{var}}` por `"$ALS_VAR_VAR"` no comando compilado.
+
+---
+
+## 2. Revisão Adversarial Multi-Agente sobre o DESIGN V0 (Fase 3 — `multi-agent-brainstorming`)
+
+### 2.1 Parecer do Agente 1: Skeptic / Challenger ("Por que este DESIGN V0 vai falhar em produção?")
+
+* **[Obj-S1] Conflito entre Sobrescrita Posicional e Argumentos Posicionais do Comando Alvo ("Bug do `conectar ls`"):**
+  * *Ataque:* No DESIGN V0, qualquer argumento que não comece com `-` ou `@` preenche a primeira variável `{{var}}`. Considere o comando `conectar` (`ssh -i {{key_path}} ubuntu@{{server_ip}}`) onde `key_path` e `server_ip` são credenciais fixas salvas em `secrets.toml`. Se o usuário rodar `conectar ls -la` para listar arquivos no servidor remoto, o DESIGN V0 vai capturar `ls` como o valor da 1ª variável (`{{key_path}}`), tentando rodar `ssh -i "ls" ubuntu@203.0.113.10 -la`!
+  * *Exigência:* É necessário distinguir variáveis de **credencial fixa** (que só mudam via `@var=val`) de variáveis de **parâmetro posicional/dinâmico** (ou exigir que argumentos posicionais preencham apenas variáveis que aceitem parâmetro de chamada, respeitando também o separador POSIX `--`).
+* **[Obj-S2] Bug de Aspas Assimétricas no `compiler.go` Atual com `KEY={{var}}`:**
+  * *Ataque:* O regex atual em `internal/exec/compiler.go` é `(["'])?\{\{([a-zA-Z0-9_-]+)\}\}(["'])?`. Os grupos de aspas de abertura (`sub[1]`) e fechamento (`sub[3]`) são opcionais e independentes! Se o usuário cadastrar `'URL={{url}}'` ou `"URL={{url}}"`, não há aspas *imediatamente antes* de `{{`, mas há uma aspa *imediatamente depois* de `}}`. O `compiler.go` consome a aspa de fechamento e a substitui por `"$ALS_VAR_URL"`, gerando `'URL="$ALS_VAR_URL"` — uma string com aspa simples não fechada que quebra o `/bin/sh` com `Syntax error: Unterminated quoted string`!
+* **[Obj-S3] Corrupção de Comando por `strings.ReplaceAll` Cego no Auto-Fix do Linter:**
+  * *Ataque:* Em `internal/cli/add.go` (linha 202), o auto-fix do Linter faz `strings.ReplaceAll(rawCmd, w.RawMatch, placeholder)`. Se o comando for `fvm flutter build appbundle --flavor cda -t lib/main_cda.dart --dart-define FLAVOR=cda` e o linter extrair `w.RawMatch = "cda"`, o `ReplaceAll` destruirá o comando trocando todas as ocorrências: `--flavor {{flavor}} -t lib/main_{{flavor}}.dart --dart-define FLAVOR={{flavor}}`.
+
+### 2.2 Parecer do Agente 2: Constraint Guardian (Segurança, Concorrência, Integridade de Dados)
+
+* **[Obj-C1] Vazamento de Segredo em `commands.toml` ao Alternar Modo da Variável no `als edit`:**
+  * *Ataque:* Se uma variável tinha `default = "https://..."` salvo em `commands.toml` (público no Git) e no `als edit` o usuário marca `secret = true`, se o código apenas gravar no `secrets.toml` sem limpar `VarDef.Default = ""` no `commands.toml`, o valor sensível continuará exposto no repositório Git após `als sync`.
+* **[Obj-C2] Perda de Segredos e Symlink Órfão ao Renomear Alias no `als edit`:**
+  * *Ataque:* Se o usuário abrir `als edit buildCdaForcaAdr` e alterar o nome para `buildCda`, salvar apenas a nova chave em `commands.toml` deixará `buildCdaForcaAdr` duplicado no `commands.toml`, deixará o symlink antigo `~/.local/share/als/bin/buildCdaForcaAdr` ativo e perderá o vínculo com `[commands.buildCdaForcaAdr]` no `secrets.toml`. A operação de renomeação precisa ser atômica sob `WithLock` migrando `commands.toml` e `secrets.toml` e reconciliando os symlinks.
+
+### 2.3 Parecer do Agente 3: User Advocate (Usabilidade, Carga Cognitiva e Descoberta)
+
+* **[Obj-U1] Invisibilidade de Parâmetros no `als list`:**
+  * *Ataque:* Mesmo após parametrizar `buildCdaForcaAdr` com `URL={{url}}`, quando o usuário roda `als list` (como na captura de tela enviada), todas as palavras do comando aparecem na mesma cor cinza (`lipgloss.Color("248")`), sem destacar `{{url}}` e sem mostrar se `{{url}}` tem um valor padrão salvo ou como passar outro valor no terminal.
+* **[Obj-U2] Fricção no Prompt Quando Já Existe Valor Salvo/Default:**
+  * *Ataque:* Quando o usuário escolhe o modo "Perguntar sempre (com sugestão padrão)" ou quando edita uma variável no `als edit`, o campo de input do `huh.NewInput()` vem em branco se não for pré-populado com o valor atual salvo em `secrets.toml` / `default`, obrigando o usuário a redigitar ou colar a URL inteira toda vez.
+
+### 2.4 Decisão do Agente 4: Integrator / Arbiter
+
+* **Disposição Final da Revisão Multi-Agente:** **`APPROVED` (com incorporação obrigatória das 7 correções no DESIGN V1)**.
+* **Racional do Árbitro:** As objeções `Obj-S1`, `Obj-S2` e `Obj-S3` identificaram bugs reais no código existente (`compiler.go` e `add.go`) e um caso de borda importante na resolução posicional (`resolver.go`). Todas as 7 correções são cirúrgicas, não inflam o escopo e tornam a experiência de criar, editar e executar comandos parametrizados consistente e à prova de falhas.
+
+---
+
+## 3. DESIGN V1 Consolidado (Fase 4 — Design Revision)
+
+### 3.1 Correção do Compilador de Template (`internal/exec/compiler.go` — Resolve `Obj-S2`)
+* O compilador deixa de capturar aspas soltas assimétricas. Ele passa a:
+  1. Reconhecer `"{{var}}"` ou `'{{var}}'` **apenas quando as aspas de abertura e fechamento forem idênticas e imediatamente adjacentes ao placeholder**, convertendo para `"$ALS_VAR_VAR"`.
+  2. Quando `{{var}}` estiver colado a um prefixo como `URL={{url}}` (fora de aspas) ou dentro de aspas maiores (`"--dart-define=URL={{url}}"`):
+     * Se estiver fora de aspas: converte `{{url}}` para `"$ALS_VAR_URL"`, resultando em `URL="$ALS_VAR_URL"` (que no `/bin/sh` POSIX concatena `URL=` com o conteúdo protegido de `$ALS_VAR_URL` sem dividir em espaços).
+     * Se estiver dentro de aspas duplas (`"URL={{url}}"`): converte `{{url}}` para `$ALS_VAR_URL`, preservando as aspas duplas externas (`"URL=$ALS_VAR_URL"`).
+     * Se estiver dentro de aspas simples (`'URL={{url}}'`): converte `{{url}}` para `'"$ALS_VAR_URL"'`, fechando a aspa simples, expandindo a variável entre aspas duplas e reabrindo a aspa simples.
+
+### 3.2 Linter Preciso por Span (`internal/linter/linter.go` — Resolve `Obj-S3`)
+* A struct `LintWarning` passa a conter:
+  * `Type`: `"raw_ip"`, `"relative_path"`, `"raw_token"`, `"key_value_url"`, `"raw_url"`.
+  * `TargetSpan`: trecho exato a ser substituído no comando (ex.: `URL=https://tabletserveroci.casadoadubo.com.br:8601`).
+  * `ReplacementSpan`: trecho parametrizado (ex.: `URL={{url}}`).
+  * `RawMatch`: apenas o valor extraído para persistência (ex.: `https://tabletserveroci.casadoadubo.com.br:8601`).
+  * `VariableKey`: nome sugerido da variável em `snake_case` minúsculo (ex.: `url`).
+* A substituição usa `strings.Replace(rawCmd, w.TargetSpan, w.ReplacementSpan, 1)`, impedindo que substrings curtas corrompam outras partes do comando.
+
+### 3.3 Resolução Posicional Determinística e Segura (`internal/exec/resolver.go` — Resolve `Obj-S1` e `Obj-U2`)
+* Adicionamos o campo `Positional bool` (`toml:"positional,omitempty"`) ou regra clara em `VarDef`:
+  * Ordem de resolução dos argumentos recebidos no Modo Shim (`args`):
+    1. **Respeito ao delimitador POSIX `--`:** Tudo após `--` vai direto para `RemainingArgs` (`"$@"`), sem ser inspecionado pelo `als`.
+    2. **Overrides explícitos `@var=valor` / `@var:valor`:** Sempre têm prioridade máxima para a variável nomeada.
+    3. **Matches exatos de `choices`:** Se um argumento posicional bater com uma opção de `choices` de uma variável ainda não resolvida, resolve essa variável.
+    4. **Argumentos Posicionais Diretos (`buildCdaForcaAdr https://...`):**
+       * Todo argumento que **não** comece com `-` (não é flag) é associado, na ordem, às variáveis do comando que aceitam entrada posicional:
+         * Variáveis sem valor fixo salvo (modo **Prompt / Dinâmico**); OU
+         * Variáveis com `Default` / valor salvo que estejam marcadas como **Parâmetro Posicional (`positional = true`)** ou quando o comando possuir variáveis de parâmetro (como `{{url}}`), permitindo que `buildCdaForcaAdr https://outra-url:8601` sobrescreva o valor padrão de `{{url}}` diretamente sem `@url=`!
+       * Variáveis de credencial estrita (como `key_path` em comandos SSH com múltiplas variáveis onde `positional = false`) não engolem subcomandos como `ls`.
+    5. **Fallback para Valor Salvo (`secrets.toml` > `default` > `env`) e Prompt Interativo (`huh`):**
+       * Se nenhuma entrada CLI foi passada, busca em `secrets.toml` e depois em `VarDef.Default`.
+       * Se a variável for configurada como `prompt_always = true` (Modo "Perguntar toda vez"), abre o prompt interativo `huh.NewInput()` **já pré-preenchido** com o último valor/default (`Obj-U2`), permitindo apenas apertar `Enter` para confirmar ou digitar/colar outro valor.
+
+### 3.4 Fluxo Unificado de Variáveis no `als add` e Novo Comando `als edit` (`internal/cli/add.go`, `internal/cli/edit.go` — Resolve `Obj-C1`, `Obj-C2`, `Obj-U1`)
+* **Dica explícita na TUI:** O campo `Command to execute` no `als add` e `als edit` exibe na `Description`:
+  `Use {{var}} for dynamic parameters (e.g. --dart-define URL={{url}}).`
+* **Configuração Guiada de Variáveis (`configureVariablesWizard`):**
+  * Sempre que o comando final contiver `{{var}}` (adicionado manualmente pelo usuário ou convertido pelo Linter), para cada variável `vName`, o wizard pergunta de forma enxuta:
+    1. **Modo de Preenchimento da variável `{{vName}}`:**
+       * `Valor padrão salvo (roda direto, mas aceita outro valor na chamada: alias <valor>)`
+       * `Perguntar sempre que executar (abre prompt no terminal se não for passado na chamada)`
+       * `Lista de opções pré-definidas (choices: ex. prod, homol, dev)`
+    2. **Valor padrão / Opções** (já pré-preenchido se o Linter acabou de extrair `https://...` do comando ou se já existia no `als edit`).
+    3. **Isolamento (Segredo local vs Público no Git):** Se deseja salvar o valor em `secrets.toml` (local, fora do Git) ou como `default` em `commands.toml`. Se `secret = true`, limpa obrigatoriamente `Default = ""` em `commands.toml` (`Obj-C1`).
+* **Novo Comando `als edit [alias]`:**
+  * Se chamado sem argumento (`als edit`), lista os comandos cadastrados num seletor interativo `huh.Select`.
+  * Abre o formulário pré-preenchido com os dados atuais de `buildCdaForcaAdr` (incluindo o comando atual), passa pelo Linter (permitindo converter `URL=https://...` em `URL={{url}}` com 1 confirmação) e pelo wizard de variáveis.
+  * Persiste via `st.UpdateCommand(oldAlias, newAlias, cmdDef)` sob `WithLock` e atualiza os symlinks no `shimMgr` (`Obj-C2`).
+* **Destaque Visual no `als list` (`internal/cli/list.go` — Resolve `Obj-U1`):**
+  * Destaca placeholders `{{var}}` em cor diferenciada dentro da string do comando e exibe uma linha resumo abaixo dos comandos parametrizados (ex.: `↳ params: {{url}} (usage: buildCdaForcaAdr [<url>] or @url=<val>)`).
+
+---
+
+## 4. Registro de Decisões da v1.1 (Decision Log)
+
+| ID | Decisão | Alternativas Consideradas | Objeções Associadas | Resolução e Racional Final |
+| :--- | :--- | :--- | :--- | :--- |
+| **D7** | Sobrescrita de parâmetro via argumento posicional direto (`alias <valor>`) + `@var=valor` | Flag `-p <valor>`; flags dinâmicas `--<var>=<valor>` | `Obj-S1`, `Obj-S2 (v1)` | Mais curto de digitar que `-p` e `@var=`, e zero risco de colidir com flags `-p` nativas de comandos Unix (`ssh`, `docker`). |
+| **D8** | Linter de `KEY=VAL` e URLs baseado em `TargetSpan` -> `ReplacementSpan` | `strings.ReplaceAll` apenas no valor bruto | `Obj-S3` | Impede que valores curtos ou repetidos adulterem outras partes do comando ao parametrizar. |
+| **D9** | Compilador sensível ao contexto de aspas (`compiler.go`) | Regex gulosa com aspas opcionais independentes | `Obj-S2` | Corrige bug de aspas não fechadas em `'KEY={{var}}'` e `"KEY={{var}}"`, garantindo expansão segura no `/bin/sh`. |
+| **D10** | Comando `als edit [alias]` compartilhando pipeline de Linter + Wizard de Variáveis com `als add` | Editar arquivos TOML manualmente ou recriar com `als add` | `Obj-C1`, `Obj-C2`, `Obj-U2` | Permite parametrizar comandos já cadastrados (como `buildCdaForcaAdr`) em segundos sem perder configurações e sem vazar segredos. |
+
+---
+
+## 5. Verificação de Completude da v1.1 (Fase 5 — Completeness Check)
+
+| Dimensão | Status | Cobertura no DESIGN V1 (v1.1) |
+| :--- | :---: | :--- |
+| **Requisitos Funcionais** | ✅ | Linter detecta URLs e `KEY=VAL`, wizard configura modo da variável, `als edit` edita/renomeia comandos existentes, shim aceita argumento posicional direto. |
+| **Requisitos Não-Funcionais** | ✅ | Execução do shim permanece `< 5ms`, zero dependências novas no `go.mod`, lock exclusivo em edições/renomeações. |
+| **Edge Cases** | ✅ | `URL={{url}}` colado sem espaço, `"URL={{url}}"` entre aspas duplas/simples, argumentos extras com flags (`-v`), delimitador `--`, valores de URL contendo `:`, `/`, `?`, `&`, `=`. |
+| **Failure Modes & Segurança** | ✅ | Limpeza automática de `Default` público quando `Secret = true` (`Obj-C1`), migração atômica de `secrets.toml` ao renomear comando (`Obj-C2`), substituição única por span no Linter (`Obj-S3`). |
+| **Testes** | ✅ | Testes unitários para `CompileTemplate` (`URL={{url}}`, `'URL={{url}}'`, `"URL={{url}}"`), `ResolveVariables` (posicional direto + flags extras), `linter.Analyze` (URLs e `--dart-define`) e `Store.UpdateCommand`. |
+
+---
+
+## 6. Plano de Implementação Faseado e Critérios de Aceite da v1.1 (Fase 6)
+
+### Etapa 1: Compilador Contextual e Resolução Posicional (`internal/exec`, `internal/store`)
+* **Arquivos modificados:**
+  * `internal/store/model.go` e `internal/store/store.go`: Adição de metadados de variável (`Positional`, `PromptAlways`) em `VarDef` e método atômico `UpdateCommand(oldName, newName string, cmd Command)`.
+  * `internal/exec/compiler.go` e `internal/exec/compiler_test.go`: Correção do `CompileTemplate` para lidar com `KEY={{var}}`, `"KEY={{var}}"` e `'KEY={{var}}'` sem corromper aspas.
+  * `internal/exec/resolver.go` e `internal/exec/exec_test.go`: Suporte a argumentos posicionais diretos para variáveis dinâmicas/posicionais (ex.: `buildCdaForcaAdr https://...`), suporte ao separador `--` e pré-preenchimento do input interativo quando houver valor padrão/salvo.
+
+### Etapa 2: Evolução do Linter para URLs e `KEY=VALUE` (`internal/linter`)
+* **Arquivos modificados:**
+  * `internal/linter/linter.go` e `internal/linter/linter_test.go`: Detecção de `CHAVE=https://...`, `--dart-define CHAVE=VALOR` e URLs avulsas, preenchendo `TargetSpan`, `ReplacementSpan`, `RawMatch` e `VariableKey` (ex.: `URL=https://...` $\rightarrow$ `URL={{url}}`).
+
+### Etapa 3: Wizard de Variáveis, Comando `als edit` e Destaque no `als list` (`internal/cli`)
+* **Arquivos modificados/criados:**
+  * `internal/cli/add.go`: Instrução de `{{var}}` no formulário, substituição segura via `TargetSpan` do Linter e wizard interativo de configuração de variáveis (`configureVariablesWizard`).
+  * `internal/cli/edit.go` (novo): Comando `als edit [alias]` com seletor interativo (se omitido o nome), formulário pré-preenchido, execução opcional do Linter para parametrizar trechos existentes, configuração de variáveis e atualização atômica de store + shims.
+  * `internal/cli/list.go`: Destaque colorido de `{{var}}` e dica de uso dos parâmetros na listagem.
+
+### Critérios de Aceite Finais
+1. Rodar `als edit buildCdaForcaAdr`, aceitar a sugestão do Linter para transformar `URL=https://tabletserveroci.casadoadubo.com.br:8601` em `URL={{url}}` e salvar o valor padrão.
+2. Rodar `buildCdaForcaAdr --als-dry-run` (sem argumentos) e verificar que resolve `URL=https://tabletserveroci.casadoadubo.com.br:8601` via `$ALS_VAR_URL`.
+3. Rodar `buildCdaForcaAdr https://outro-servidor.com.br:8601 --als-dry-run` e verificar que `{{url}}` recebe `https://outro-servidor.com.br:8601` sem precisar digitar `@url=` nem `-p`.
+4. Todos os testes automatizados (`go test ./...`) passando sem regressões.

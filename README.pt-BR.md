@@ -129,11 +129,18 @@ conectarServidor -v -p 2222
 ```
 
 #### Sobrescrita Rápida de Parâmetros
-Se precisar conectar pontualmente em outro IP sem alterar o arquivo salvo:
+Você pode passar valores de parâmetros de duas formas:
 
-```bash
-conectarServidor @server_ip=203.0.113.25
-```
+1. **Posicional Direto (Mais rápido e curto):**
+   Passe o valor diretamente no terminal sem precisar de flags:
+   ```bash
+   buildCdaForcaAdr https://tabletserveroci.casadoadubo.com.br:8601
+   ```
+2. **Nomeado Explícito (`@var=valor`):**
+   Ideal para comandos com múltiplos parâmetros quando você quer alterar uma variável específica:
+   ```bash
+   conectarServidor @server_ip=203.0.113.25
+   ```
 
 ---
 
@@ -202,6 +209,9 @@ Um dos casos de uso mais poderosos do `als` é a padronização de rotinas e flu
 ```bash
 # Listar todos os aliases cadastrados
 als list
+
+# Editar um alias existente (ou escolher interativamente se omitir o nome)
+als edit buildCdaForcaAdr
 
 # Ver detalhes e localização do shim de um alias
 als info conectarServidor

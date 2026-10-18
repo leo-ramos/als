@@ -121,6 +121,14 @@ func (s *Store) GetCommand(name string) (*Command, error) {
 
 // SaveCommand adds or updates a command definition.
 func (s *Store) SaveCommand(name string, cmd Command) error {
+	// Ensure variables with secret = true do not persist Default in commands.toml
+	for vName, vDef := range cmd.Vars {
+		if vDef.Secret {
+			vDef.Default = ""
+			cmd.Vars[vName] = vDef
+		}
+	}
+
 	return s.WithLock(func() error {
 		doc, err := s.LoadCommands()
 		if err != nil {
@@ -128,6 +136,81 @@ func (s *Store) SaveCommand(name string, cmd Command) error {
 		}
 		doc.Commands[name] = cmd
 		return s.atomicWriteTOML(s.cfg.CommandsPath(), doc, 0644)
+	})
+}
+
+// UpdateCommand updates an existing command definition, supporting atomic renaming
+// and migration of local secrets.
+func (s *Store) UpdateCommand(oldName, newName string, cmd Command) error {
+	// Ensure variables with secret = true do not persist Default in commands.toml
+	for vName, vDef := range cmd.Vars {
+		if vDef.Secret {
+			vDef.Default = ""
+			cmd.Vars[vName] = vDef
+		}
+	}
+
+	return s.WithLock(func() error {
+		doc, err := s.LoadCommands()
+		if err != nil {
+			return err
+		}
+		if _, exists := doc.Commands[oldName]; !exists {
+			return ErrCommandNotFound
+		}
+		if oldName != newName {
+			if _, exists := doc.Commands[newName]; exists {
+				return ErrCommandExists
+			}
+			delete(doc.Commands, oldName)
+		}
+
+		doc.Commands[newName] = cmd
+		if err := s.atomicWriteTOML(s.cfg.CommandsPath(), doc, 0644); err != nil {
+			return err
+		}
+
+		// Handle secrets migration and variable pruning if necessary
+		secDoc, err := s.LoadSecrets()
+		if err == nil {
+			secModified := false
+			if oldName != newName {
+				if oldCmdSec, ok := secDoc.Commands[oldName]; ok {
+					secDoc.Commands[newName] = oldCmdSec
+					delete(secDoc.Commands, oldName)
+					secModified = true
+				}
+				if oldChoiceSec, ok := secDoc.Choices[oldName]; ok {
+					secDoc.Choices[newName] = oldChoiceSec
+					delete(secDoc.Choices, oldName)
+					secModified = true
+				}
+			}
+
+			// Clean up any secrets for variables that were removed in the new cmd definition
+			if currentCmdSec, ok := secDoc.Commands[newName]; ok {
+				for varName := range currentCmdSec {
+					if _, stillExists := cmd.Vars[varName]; !stillExists {
+						delete(currentCmdSec, varName)
+						secModified = true
+					}
+				}
+			}
+			if currentChoiceSec, ok := secDoc.Choices[newName]; ok {
+				for varName := range currentChoiceSec {
+					if _, stillExists := cmd.Vars[varName]; !stillExists {
+						delete(currentChoiceSec, varName)
+						secModified = true
+					}
+				}
+			}
+
+			if secModified {
+				_ = s.atomicWriteTOML(s.cfg.SecretsPath(), secDoc, 0600)
+			}
+		}
+
+		return nil
 	})
 }
 

@@ -129,11 +129,18 @@ connectServer -v -p 2222
 ```
 
 #### Quick Parameter Override
-If you need a one-off connection to another IP without modifying your saved file:
+You can pass parameter values in two ways:
 
-```bash
-connectServer @server_ip=203.0.113.25
-```
+1. **Direct Positional (Shortest & Fastest):**
+   Pass the value directly on the command line without extra flags:
+   ```bash
+   buildCdaForcaAdr https://tabletserveroci.casadoadubo.com.br:8601
+   ```
+2. **Explicit Named (`@var=value`):**
+   Best for commands with multiple parameters when you want to target a specific variable:
+   ```bash
+   connectServer @server_ip=203.0.113.25
+   ```
 
 ---
 
@@ -202,6 +209,9 @@ One of the strongest use cases for `als` is standardizing operational workflows 
 ```bash
 # List all registered aliases
 als list
+
+# Edit an existing alias (or pick interactively from a list if name is omitted)
+als edit buildCdaForcaAdr
 
 # View details and shim location of an alias
 als info connectServer
